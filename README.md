@@ -40,7 +40,7 @@ fulfills a requirement of not having traffic to any public IP Space.
 The default AMI, as provided by AWS, does the plumbing for communication with the EKS Cluster Masters when setting up the EKS Worker Nodes.
 This plumbing, by means of a [bootstrap.sh](https://github.com/awslabs/amazon-eks-ami/blob/master/files/bootstrap.sh)
 shell script, is an example on how to deploy nodes, or build images to use with EKS.  
-In this specific case the ideal outcome is to have the ['--apiserver-endpoint'] (https://github.com/awslabs/amazon-eks-ami/blob/master/files/bootstrap.sh), from the bootstrap script,
+In this specific case the ideal outcome is to have the ['--apiserver-endpoint'](https://github.com/awslabs/amazon-eks-ami/blob/master/files/bootstrap.sh), from the bootstrap script,
 be something else then the default hostname of the EKS Master Cluster's Load Balancer.
 As a matter of fact the local ENI in the Availability Zone, and Subnet that the Worker Node is deployed in, would be most excellent. Fortunately AWS has tooling that can be used to introspect what the surrounding environment looks like upon bootstrapping a node, which sets the stage to reconfigure, or manipulate the
 node into the networking behavior that is desired.

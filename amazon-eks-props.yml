@@ -1,0 +1,54 @@
+[
+  {
+    "ParameterKey": "BootstrapArguments",
+    "ParameterValue": ""
+  },
+  {
+    "ParameterKey": "ClusterControlPlaneSecurityGroup",
+    "ParameterValue": "sg-9ec4cde0"
+  },
+  {
+    "ParameterKey": "ClusterName",
+    "ParameterValue": "tester"
+  },
+  {
+    "ParameterKey": "KeyName",
+    "ParameterValue": "2B7EB735-C73A-43FC-A3B0-C26049452504-key"
+  },
+  {
+    "ParameterKey": "NodeAutoScalingGroupMaxSize",
+    "ParameterValue": "3"
+  },
+  {
+    "ParameterKey": "NodeAutoScalingGroupMinSize",
+    "ParameterValue": "1"
+  },
+  {
+    "ParameterKey": "NodeGroupName",
+    "ParameterValue": "workers"
+  },
+  {
+    "ParameterKey": "NodeImageId",
+    "ParameterValue": "ami-0a54c984b9f908c81"
+  },
+  {
+    "ParameterKey": "NodeInstanceType",
+    "ParameterValue": "t2.medium"
+  },
+  {
+    "ParameterKey": "NodeVolumeSize",
+    "ParameterValue": "20"
+  },
+  {
+    "ParameterKey": "ControlNodeSubnet",
+    "ParameterValue": "subnet-67e4711e"
+  },
+  {
+    "ParameterKey": "Subnets",
+    "ParameterValue": "subnet-67e4711e,subnet-fb9225b0"
+  },
+  {
+    "ParameterKey": "VpcId",
+    "ParameterValue": "vpc-50714429"
+  }
+]

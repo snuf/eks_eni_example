@@ -1,0 +1,551 @@
+#
+# Needs to be split, where the ControlNode is first created, gets the rights
+# to create the required components and then calls cloudformation to build
+# the EKS cluster.
+#
+---
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Amazon EKS - Node Group - Released 2018-08-30'
+# Should add mappings for OS..
+Parameters:
+  ControlNodePublicIp:
+    Description: Give the ControlNode a public IP by default
+    Type: String
+    Default: false
+    AllowedValues:
+    - true
+    - false
+
+  ControlNodeInstanceType:
+    Description: EC2 instance type for the ControlNode instances
+    Type: String
+    Default: t2.micro
+    AllowedValues:
+    - t2.micro
+    - t2.small
+    - t2.medium
+
+  # ControlNodeImageId:
+  #  Description: AMI id for the ControlNode instances.
+  #  Type: AWS::EC2::Image::Id
+  #  Default: ami-0d1000aff9a9bad89
+
+  ControlNodeSubnet:
+    Description: The subnets where workers can be created.
+    Type: String
+
+  KeyName:
+    Description: The EC2 Key Pair to allow SSH access to the instances
+    Type: AWS::EC2::KeyPair::KeyName
+
+  NodeImageId:
+    Type: AWS::EC2::Image::Id
+    Description: AMI id for the node instances.
+
+  NodeInstanceType:
+    Description: EC2 instance type for the node instances
+    Type: String
+    Default: t2.medium
+    AllowedValues:
+    - t2.small
+    - t2.medium
+    - t2.large
+    - t2.xlarge
+    - t2.2xlarge
+    - m3.medium
+    - m3.large
+    - m3.xlarge
+    - m3.2xlarge
+    - m4.large
+    - m4.xlarge
+    - m4.2xlarge
+    - m4.4xlarge
+    - m4.10xlarge
+    - m5.large
+    - m5.xlarge
+    - m5.2xlarge
+    - m5.4xlarge
+    - m5.12xlarge
+    - m5.24xlarge
+    - c4.large
+    - c4.xlarge
+    - c4.2xlarge
+    - c4.4xlarge
+    - c4.8xlarge
+    - c5.large
+    - c5.xlarge
+    - c5.2xlarge
+    - c5.4xlarge
+    - c5.9xlarge
+    - c5.18xlarge
+    - i3.large
+    - i3.xlarge
+    - i3.2xlarge
+    - i3.4xlarge
+    - i3.8xlarge
+    - i3.16xlarge
+    - r3.xlarge
+    - r3.2xlarge
+    - r3.4xlarge
+    - r3.8xlarge
+    - r4.large
+    - r4.xlarge
+    - r4.2xlarge
+    - r4.4xlarge
+    - r4.8xlarge
+    - r4.16xlarge
+    - x1.16xlarge
+    - x1.32xlarge
+    - p2.xlarge
+    - p2.8xlarge
+    - p2.16xlarge
+    - p3.2xlarge
+    - p3.8xlarge
+    - p3.16xlarge
+    ConstraintDescription: Must be a valid EC2 instance type
+
+  NodeAutoScalingGroupMinSize:
+    Type: Number
+    Description: Minimum size of Node Group ASG.
+    Default: 1
+
+  NodeAutoScalingGroupMaxSize:
+    Type: Number
+    Description: Maximum size of Node Group ASG.
+    Default: 3
+
+  NodeVolumeSize:
+    Type: Number
+    Description: Node volume size
+    Default: 20
+
+  ClusterName:
+    Description: The cluster name provided when the cluster was created. If it is incorrect, nodes will not be able to join the cluster.
+    Type: String
+
+  BootstrapArguments:
+    Description: Arguments to pass to the bootstrap script. See files/bootstrap.sh in https://github.com/awslabs/amazon-eks-ami
+    Default: ""
+    Type: String
+
+  NodeGroupName:
+    Description: Unique identifier for the Node Group.
+    Type: String
+
+  ClusterControlPlaneSecurityGroup:
+    Description: The security group of the cluster control plane.
+    Type: AWS::EC2::SecurityGroup::Id
+
+  VpcId:
+    Description: The VPC of the worker instances
+    Type: AWS::EC2::VPC::Id
+
+  Subnets:
+    Description: The subnets where workers can be created.
+    Type: List<AWS::EC2::Subnet::Id>
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      -
+        Label:
+          default: "EKS Cluster"
+        Parameters:
+          - ClusterName
+          - ClusterControlPlaneSecurityGroup
+      -
+        Label:
+          default: "Worker Node Configuration"
+        Parameters:
+          - NodeGroupName
+          - NodeAutoScalingGroupMinSize
+          - NodeAutoScalingGroupMaxSize
+          - NodeInstanceType
+          - NodeImageId
+          - NodeVolumeSize
+          - KeyName
+          - BootstrapArguments
+      -
+        Label:
+          default: "Worker Network Configuration"
+        Parameters:
+          - VpcId
+          - Subnets
+
+# Should later check if a cluster exists or not...
+# For testing just toggle switches...
+Conditions:
+  CreateEksCluster: !Equals [ Yes, Yes ]
+  CreateControlNode: !Equals [ Yes, Yes ]
+  CreateWorkerNodes: !Equals [ Yes, Yes ]
+
+Resources:
+  NodeInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Path: "/"
+      Roles:
+      - !Ref NodeInstanceRole
+
+  NodeInstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - ec2.amazonaws.com
+          Action:
+          - sts:AssumeRole
+      Path: "/"
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy
+        - arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy
+        - arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly
+
+  NodeSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for all nodes in the cluster
+      VpcId:
+        !Ref VpcId
+      Tags:
+      - Key: !Sub "kubernetes.io/cluster/${ClusterName}"
+        Value: 'owned'
+
+  NodeSecurityGroupIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    DependsOn: NodeSecurityGroup
+    Properties:
+      Description: Allow node to communicate with each other
+      GroupId: !Ref NodeSecurityGroup
+      SourceSecurityGroupId: !Ref NodeSecurityGroup
+      IpProtocol: '-1'
+      FromPort: 0
+      ToPort: 65535
+
+  NodeSecurityGroupFromControlPlaneIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    DependsOn: NodeSecurityGroup
+    Properties:
+      Description: Allow worker Kubelets and pods to receive communication from the cluster control plane
+      GroupId: !Ref NodeSecurityGroup
+      SourceSecurityGroupId: !Ref ClusterControlPlaneSecurityGroup
+      IpProtocol: tcp
+      FromPort: 1025
+      ToPort: 65535
+
+  ControlPlaneEgressToNodeSecurityGroup:
+    Type: AWS::EC2::SecurityGroupEgress
+    DependsOn: NodeSecurityGroup
+    Properties:
+      Description: Allow the cluster control plane to communicate with worker Kubelet and pods
+      GroupId: !Ref ClusterControlPlaneSecurityGroup
+      DestinationSecurityGroupId: !Ref NodeSecurityGroup
+      IpProtocol: tcp
+      FromPort: 1025
+      ToPort: 65535
+
+  NodeSecurityGroupFromControlPlaneOn443Ingress:
+    Type: AWS::EC2::SecurityGroupIngress
+    DependsOn: NodeSecurityGroup
+    Properties:
+      Description: Allow pods running extension API servers on port 443 to receive communication from cluster control plane
+      GroupId: !Ref NodeSecurityGroup
+      SourceSecurityGroupId: !Ref ClusterControlPlaneSecurityGroup
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+
+  ControlPlaneEgressToNodeSecurityGroupOn443:
+    Type: AWS::EC2::SecurityGroupEgress
+    DependsOn: NodeSecurityGroup
+    Properties:
+      Description: Allow the cluster control plane to communicate with pods running extension API servers on port 443
+      GroupId: !Ref ClusterControlPlaneSecurityGroup
+      DestinationSecurityGroupId: !Ref NodeSecurityGroup
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+
+  ClusterControlPlaneSecurityGroupIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    DependsOn: NodeSecurityGroup
+    Properties:
+      Description: Allow pods to communicate with the cluster API Server
+      GroupId: !Ref ClusterControlPlaneSecurityGroup
+      SourceSecurityGroupId: !Ref NodeSecurityGroup
+      IpProtocol: tcp
+      ToPort: 443
+      FromPort: 443
+
+  # -0-
+  ControlNodeControlPlaneSecurityGroupIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    DependsOn: NodeSecurityGroup
+    Properties:
+      Description: Allow Control Node to communicate with the cluster API Server
+      GroupId: !Ref NodeSecurityGroup
+      SourceSecurityGroupId: !Ref ControlNodeSecurityGroup
+      IpProtocol: tcp
+      ToPort: 443
+      FromPort: 443
+
+  ControlNodeSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for the API Control Node in the cluster
+      VpcId:
+        !Ref VpcId
+      Tags:
+      - Key: !Sub "kubernetes.io/cluster/${ClusterName}"
+        Value: 'owned'
+      SecurityGroupIngress:
+        IpProtocol: tcp
+        ToPort: 22
+        FromPort: 22
+        CidrIp: 0.0.0.0/0
+
+  EKSServiceRole:
+    Type: AWS::IAM::Role
+    Condition: CreateEksCluster
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - eks.amazonaws.com
+          Action:
+          - sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonEKSServicePolicy
+        - arn:aws:iam::aws:policy/AmazonEKSClusterPolicy
+
+  # Need to refine the secgroup better for the ENIs of the EKS Cluster
+  ENISecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    DependsOn: EKSServiceRole
+    Condition: CreateEksCluster
+    Properties:
+      GroupDescription: Security group for all nodes in the cluster
+      VpcId:
+        !Ref VpcId
+      Tags:
+      - Key: !Sub "kubernetes.io/cluster/${ClusterName}"
+        Value: 'owned'
+
+  EniWorkerGroupIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    DependsOn: ENISecurityGroup
+    Condition: CreateEksCluster
+    Properties:
+      Description: Allow nodes to communicate to the ENIs
+      GroupId: !Ref NodeSecurityGroup
+      SourceSecurityGroupId: !Ref NodeSecurityGroup
+      IpProtocol: tcp
+      ToPort: 443
+      FromPort: 443
+
+  EKSCluster:
+    Type: "AWS::EKS::Cluster"
+    DependsOn: ENISecurityGroup
+    Condition: CreateEksCluster
+    Properties:
+      Name: !Ref ClusterName
+      Version: "1.10"
+      # "arn:aws:iam::012345678910:role/eks-service-role-AWSServiceRoleForAmazonEKS-EXAMPLEBQ4PI"
+      RoleArn: !GetAtt EKSServiceRole.Arn
+      ResourcesVpcConfig:
+        # This security group gets applied to the ENIs created in the worker node subnets!
+        SecurityGroupIds:
+          - !Ref NodeSecurityGroup
+        # SubnetIds: ["subnet-6782e71e", "subnet-e7e761ac"]
+        SubnetIds: !Ref Subnets
+
+  # TODO: Fix security group for mapper
+  # for now we assume that the default group has enough stuff to allow us
+  # to do what we must.. Pip, Yum and get SSHd into if required.
+  ControlNode:
+    Type: AWS::EC2::Instance
+    DependsOn: EKSCluster
+    Condition: CreateControlNode
+    Properties:
+      IamInstanceProfile: !Ref NodeInstanceProfile
+      ImageId: !Ref NodeImageId
+      InstanceType: !Ref ControlNodeInstanceType
+      KeyName: !Ref KeyName
+      NetworkInterfaces:
+        - AssociatePublicIpAddress: False
+          SubnetId: !Ref ControlNodeSubnet
+          DeviceIndex: '0'
+          GroupSet:
+          - !Ref ControlNodeSecurityGroup
+      # SecurityGroups:
+      # - !Ref NodeSecurityGroup
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeSize: !Ref NodeVolumeSize
+            VolumeType: gp2
+            DeleteOnTermination: true
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash -ex
+          set -o xtrace
+          # yum upgrade -y
+          yum install -y jq aws-cfn-bootstrap
+          pip install --upgrade awscli
+          CLUSTER_NAME=${ClusterName}
+          ZONE=$(curl -s http://169.254.169.254/latest/meta-data/placement/availability-zone | awk '{ print $1 }')
+          AWS_DEFAULT_REGION=$(echo $ZONE | awk '{print substr($0, 1, length($0)-1)}')
+          # TODO: Remove
+          #   Get the Role ARN that we need for the kube config.
+          ROLE_ARN=$(aws eks describe-cluster \
+            --region $AWS_DEFAULT_REGION \
+            --name $CLUSTER_NAME | \
+              jq '.cluster.roleArn' | \
+                sed -e s/\"//g)
+          # Instance Profile ARN for kubelets
+          ROLE_NAME=$(curl -s http://169.254.169.254/latest/meta-data/iam/security-credentials/)
+
+          # Grab the EKS CA
+          EKS_CA=$(aws eks describe-cluster \
+            --region $AWS_DEFAULT_REGION \
+            --name $CLUSTER_NAME | \
+              jq '.cluster.certificateAuthority.data' | \
+                sed -e s/\"//g)
+          # Get the EKS Endpoint
+          EKS_EP=$(aws eks describe-cluster --region $AWS_DEFAULT_REGION \
+            --name $CLUSTER_NAME --query cluster.endpoint | \
+              sed -e s/\"//g | sed -e s/"https:\/\/"//)
+          # Grab the last ENI IP for the master
+          ENIIP=$(aws ec2 describe-network-interfaces --region $AWS_DEFAULT_REGION | \
+            jq --arg ID $CLUSTER_NAME --arg ZONE $ZONE '.NetworkInterfaces[] |
+              select(.Description|test("Amazon EKS "+$ID)) |
+              select(.AvailabilityZone|test($ZONE)) | .PrivateIpAddress' | \
+                sed -e s/\"//g | tail -1)
+          set +e
+          grep -q "$ENIIP\s$EKS_EP" /etc/hosts
+          if [ "$?" != "0" ]; then
+              echo "modifying hosts for ENI usage"
+              echo "$ENIIP $EKS_EP" >> /etc/hosts
+          fi
+          set -e
+          # Log who we are for validation, only the creator can do the one after this
+          # aws sts get-caller-identity
+          aws eks update-kubeconfig --name $CLUSTER_NAME --region $AWS_DEFAULT_REGION
+          RHOME=/root
+          cat <<EOF > $RHOME/kube.map
+          ---
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: aws-auth
+            namespace: kube-system
+          data:
+            mapRoles: |
+              - rolearn: arn:aws:iam::${AWS::AccountId}:role/$ROLE_NAME
+                username: system:node:{{EC2PrivateDNSName}}
+                groups:
+                  - system:bootstrappers
+                  - system:nodes
+          ---
+          EOF
+          export KUBECONFIG=$RHOME/.kube/config
+          kubectl apply -f $RHOME/kube.map
+          /opt/aws/bin/cfn-init -s ${AWS::StackName} -r ControlNodeper --region ${AWS::Region}
+
+  NodeGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    DependsOn: EKSCluster
+    Condition: CreateWorkerNodes
+    Properties:
+      DesiredCapacity: !Ref NodeAutoScalingGroupMaxSize
+      LaunchConfigurationName: !Ref NodeLaunchConfig
+      MinSize: !Ref NodeAutoScalingGroupMinSize
+      MaxSize: !Ref NodeAutoScalingGroupMaxSize
+      VPCZoneIdentifier:
+        !Ref Subnets
+      Tags:
+      - Key: Name
+        Value: !Sub "${ClusterName}-${NodeGroupName}-Node"
+        PropagateAtLaunch: True
+      - Key: !Sub 'kubernetes.io/cluster/${ClusterName}'
+        Value: 'owned'
+        PropagateAtLaunch: True
+    UpdatePolicy:
+      AutoScalingRollingUpdate:
+        MinInstancesInService: '1'
+        MaxBatchSize: '1'
+
+  NodeLaunchConfig:
+    Type: AWS::AutoScaling::LaunchConfiguration
+    DependsOn: EKSCluster
+    Condition: CreateWorkerNodes
+    Properties:
+      AssociatePublicIpAddress: False
+      IamInstanceProfile: !Ref NodeInstanceProfile
+      ImageId: !Ref NodeImageId
+      InstanceType: !Ref NodeInstanceType
+      KeyName: !Ref KeyName
+      SecurityGroups:
+      - !Ref NodeSecurityGroup
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeSize: !Ref NodeVolumeSize
+            VolumeType: gp2
+            DeleteOnTermination: true
+      UserData:
+        Fn::Base64:
+          !Sub |
+            #!/bin/bash
+            set -o xtrace
+            /etc/eks/bootstrap.sh ${ClusterName} ${BootstrapArguments}
+            bsrc=$?
+            yum upgrade -y
+            yum install -y jq aws-cfn-bootstrap
+            CLUSTER_NAME=$(cat /var/lib/kubelet/kubeconfig | grep command -B 1 | grep -- - | head -1 | sed -e 's/^[ ]*- //')
+            ZONE=$(curl -s http://169.254.169.254/latest/meta-data/placement/availability-zone | awk '{ print $1 }')
+            AWS_DEFAULT_REGION=$(echo $ZONE | awk '{print substr($0, 1, length($0)-1)}')
+
+            EKS_EP=$(aws eks describe-cluster --region $AWS_DEFAULT_REGION --name $CLUSTER_NAME --query cluster.endpoint | sed -e s/\"//g | sed -e s/"https:\/\/"//)
+            # MAC=$(curl -s http://169.254.169.254/latest/meta-data/network/interfaces/macs/| head -1)
+            # SUBNET=$(curl -s http://169.254.169.254/latest/meta-data/network/interfaces/macs/$MAC/subnet-id)
+            ENIIP=$(aws ec2 describe-network-interfaces --region $AWS_DEFAULT_REGION | \
+              jq --arg ID $CLUSTER_NAME --arg ZONE $ZONE '.NetworkInterfaces[] |
+                select(.Description|test("Amazon EKS "+$ID)) |
+                select(.AvailabilityZone|test($ZONE)) | .PrivateIpAddress' | \
+              sed -e s/\"//g)
+            if [ -z "$ENIIP" ]; then
+                /opt/aws/bin/cfn-signal --exit-code 2 \
+                    --stack  ${AWS::StackName} \
+                    --resource NodeGroup  \
+                    --region ${AWS::Region}
+                exit 2
+            fi
+            grep -q "$ENIIP\s$EKS_EP" /etc/hosts
+            if [ "$?" != "0" ]; then
+                echo "modifying hosts for ENI usage"
+                echo "$ENIIP $EKS_EP" >> /etc/hosts
+                sync
+                systemctl restart kubelet
+                docker kill $(docker ps -f name=kube-proxy -q)
+            else
+                echo "hosts already modified for ENI usage"
+                bsrc=1
+            fi
+
+            /opt/aws/bin/cfn-signal --exit-code $? \
+                     --stack  ${AWS::StackName} \
+                     --resource NodeGroup  \
+                     --region ${AWS::Region}
+
+Outputs:
+  NodeInstanceRole:
+    Description: The node instance role
+    Value: !GetAtt NodeInstanceRole.Arn
